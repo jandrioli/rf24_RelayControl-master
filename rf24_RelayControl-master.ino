@@ -24,8 +24,9 @@
 RF24 radio(9,10);
 
 // Radio pipe addresses for the 2 nodes to communicate.
-//const uint64_t pipes[2] = { 0xEEFAFDFDEELL, 0xEEFDFAF50DFLL };
-const uint8_t pipes[][6] = {"1Node","2Node"};
+const uint8_t pipes[][6] = {"0Node","1Node","2Node"};
+
+uint8_t selectedNode = 2;                        // which node (pipe) to talk to
 
 /**
  * exchange data via radio more efficiently with data structures.
@@ -47,7 +48,6 @@ struct relayctl {
   bool          state2 = false;                  // "" 2                                            1 byte
   bool          waterlow = false;                // indicates whether water is low                  1 byte
 } myData;
-
 
 void setup() 
 {
@@ -81,8 +81,9 @@ void setup()
   // back and forth.
   // Open 'our' pipe for writing
   // Open the 'other' pipe for reading, in position #1 (we can have up to 5 pipes open for reading)
-  radio.openWritingPipe(pipes[1]);
-  radio.openReadingPipe(1,pipes[0]);
+  radio.openWritingPipe(pipes[0]);
+  radio.openReadingPipe(1,pipes[1]);
+  radio.openReadingPipe(2,pipes[2]);
 
 
   //
@@ -111,6 +112,12 @@ void loop(void)
     {
       String sched = s1.substring(s1.indexOf(" ")+1);
       myData.sched1 = sched.substring(0, sched.length()).toInt() ;
+      s1 = "";
+    }
+    else if (s1.indexOf("select ")>=0)
+    {
+      String sched = s1.substring(s1.indexOf(" ")+1);
+      selectedNode = sched.substring(0, sched.length()).toInt() ;
       s1 = "";
     }
     else if (s1.indexOf("maxdur1 ")>=0)
@@ -158,8 +165,9 @@ void loop(void)
         "** 0 - maxdur2 120: maximum duration for relay 1 to be active in seconds \n\r"\
         "** 0 - temp -8: activate relays if temperature is under -8C\n\r"\
         "** 0 - upload: send over a new program to relay ctler\n\r"\        
-        "** 1 - stop: deactivate everything and reset all counters\n\r"\
-        "** 2 - status: returns the current status of relays and counters, temp, uptime");
+        "** 1 - select: choose a node to work with\n\r"\    
+        "** 2 - stop: deactivate everything and reset all counters\n\r"\
+        "** 3 - status: returns the current status of relays and counters, temp, uptime");
       s1 = "";
     }
     
@@ -178,7 +186,7 @@ void loop(void)
       // restart listening
       radio.startListening();
 
-      // Wait here until we get a response, or timeout
+      // Wait here until we get a response, or timeout (arrosoir sleeps for 8s)
       unsigned long started_waiting_at = millis();
       bool timeout = false;
       while ( ! radio.available() && ! timeout )
@@ -195,11 +203,12 @@ void loop(void)
   }
   if (radio.available())
   {
-    // this else used to be a part of the timeout check few lines above. 
-    //else
+    uint8_t pipeNumber = 0; // ZERO is my own pipe, validate it
     {
-      while (radio.available())
+      while (radio.available(&pipeNumber))
       {
+        printf("#%x Node(#ID) wrote ", pipeNumber);
+        
         // Fetch the payload, and see if this was the last one.
         uint8_t len = radio.getDynamicPayloadSize();
         Serial.print(len);
@@ -209,7 +218,7 @@ void loop(void)
         {
           relayctl oTemp;
           radio.read( &oTemp, len);
-          printState(oTemp);
+          printState(oTemp, node);
         }
         else
         {
@@ -233,7 +242,7 @@ void loop(void)
 }
 
 
-void printState(relayctl& myData)
+void printState(relayctl& myData, uint8_t& node)
 {
   Serial.print("Plug 1: ");
   Serial.print(myData.sched1);
@@ -268,6 +277,7 @@ void printState(relayctl& myData)
    }*/
    Serial.println("RF24-BLOB-BEGIN");
    Serial.write((uint8_t *)&myData, sizeof(myData));
-   
+   Serial.write(node);
+   Serial.println();
 }
 
