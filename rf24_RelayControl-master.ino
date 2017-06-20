@@ -24,9 +24,13 @@
 RF24 radio(9,10);
 
 // Radio pipe addresses for the 2 nodes to communicate.
-const uint8_t pipes[][6] = {"0Node","1Node","2Node"};
-
-uint8_t selectedNode = 2;                        // which node (pipe) to talk to
+// WARNING!! 3Node and 4Node are used by my testing sketches ping/pong
+// all nodes read on pipe[0] ( which is address "0Node" )
+// promicro arrosoir writes on pipes[2] 
+// arduino uno r3 testing rig jig'a'ma'thing writes on pipe[1]
+// 5Node and 6Node are dedicated listening pipes for Unor3 and arrosoir, respectively
+// These last 2 are not sure to be implemented, and also 0Node should still work
+const uint8_t addresses[][6] = {"0Node","1Node","2Node","5Node","6Node"};
 
 /**
  * exchange data via radio more efficiently with data structures.
@@ -47,10 +51,38 @@ struct relayctl {
   bool          state1 = false;                  // state of relay output 1                         1 byte
   bool          state2 = false;                  // "" 2                                            1 byte
   bool          waterlow = false;                // indicates whether water is low                  1 byte
+  byte          nodeid = 0;                      // nodeid is the identifier of the slave           1 byte
 } myData;
 
 void setup() 
 {
+  /*a little something to tell we're alive*/
+  for (int ii = 0; ii<= 5; ii++) 
+  {  
+    /*blinks the LEDS on the micro*/
+#if defined(ARDUINO_AVR_LEONARDO) 
+    RXLED1;
+    TXLED0; //TX LED is not tied to a normally controlled pin
+#else
+    digitalWrite(13, HIGH);
+#endif
+    delay(500);              // wait for a second
+#if defined(ARDUINO_AVR_LEONARDO) 
+    TXLED1;
+    RXLED0;
+#else
+    digitalWrite(13, LOW);
+#endif
+    delay(500);              // wait for a second
+  }
+#if defined(ARDUINO_AVR_LEONARDO) 
+  TXLED0; 
+  RXLED0;
+#else
+  digitalWrite(13, LOW);
+#endif
+  delay(500);
+  
   //
   // Print preamble
   //
@@ -59,6 +91,8 @@ void setup()
   Serial.println(F("RF24 Master - power socket controller"));  
   delay(500);
   Serial.println(F("Warning! Always query the controller before attempting to program it!"));  
+  delay(500);
+  Serial.println(F("Warning! Always select the target node so that somebody hears you!"));  
   delay(500);
   Serial.println(F("- - - - -"));  
   
@@ -81,10 +115,9 @@ void setup()
   // back and forth.
   // Open 'our' pipe for writing
   // Open the 'other' pipe for reading, in position #1 (we can have up to 5 pipes open for reading)
-  radio.openWritingPipe(pipes[0]);
-  radio.openReadingPipe(1,pipes[1]);
-  radio.openReadingPipe(2,pipes[2]);
-
+  radio.openWritingPipe(addresses[0]);
+  radio.openReadingPipe(1,addresses[1]);
+  radio.openReadingPipe(2,addresses[2]);
 
   //
   // Dump the configuration of the rf unit for debugging
@@ -117,7 +150,17 @@ void loop(void)
     else if (s1.indexOf("select ")>=0)
     {
       String sched = s1.substring(s1.indexOf(" ")+1);
-      selectedNode = sched.substring(0, sched.length()).toInt() ;
+      myData.nodeid = sched.substring(0, sched.length()).toInt() ;
+      Serial.print("Selected pipe address for node ");
+      Serial.print(myData.nodeid);
+      if (myData.nodeid==1)
+      {
+        radio.openWritingPipe(addresses[3]);
+      }
+      if (myData.nodeid==2)
+      {
+        radio.openWritingPipe(addresses[4]);
+      }
       s1 = "";
     }
     else if (s1.indexOf("maxdur1 ")>=0)
@@ -148,7 +191,7 @@ void loop(void)
     {
       Serial.println("Sending out new program...");
       s1 = "";
-      printState(myData);
+      printState(myData, 0);
       // First, stop listening so we can talk.
       radio.stopListening();
       // send data OTA
@@ -165,7 +208,7 @@ void loop(void)
         "** 0 - maxdur2 120: maximum duration for relay 1 to be active in seconds \n\r"\
         "** 0 - temp -8: activate relays if temperature is under -8C\n\r"\
         "** 0 - upload: send over a new program to relay ctler\n\r"\        
-        "** 1 - select: choose a node to work with\n\r"\    
+        "** 1 - select: choose a node to work with\n\r"\
         "** 2 - stop: deactivate everything and reset all counters\n\r"\
         "** 3 - status: returns the current status of relays and counters, temp, uptime");
       s1 = "";
@@ -218,7 +261,7 @@ void loop(void)
         {
           relayctl oTemp;
           radio.read( &oTemp, len);
-          printState(oTemp, node);
+          printState(oTemp, pipeNumber);
         }
         else
         {
@@ -242,7 +285,7 @@ void loop(void)
 }
 
 
-void printState(relayctl& myData, uint8_t& node)
+void printState(relayctl& myData, uint8_t node)
 {
   Serial.print("Plug 1: ");
   Serial.print(myData.sched1);
@@ -268,16 +311,9 @@ void printState(relayctl& myData, uint8_t& node)
   Serial.print(myData.waterlow);
   Serial.println();
   
-  /*unsigned long uBufSize = sizeof(myData);
-  char pBuffer[uBufSize];
-  memcpy(pBuffer, &myData, uBufSize);
-  
-  for(int i = 0; i<uBufSize;i++) {
-     Serial.print(pBuffer[i]);
-   }*/
-   Serial.println("RF24-BLOB-BEGIN");
-   Serial.write((uint8_t *)&myData, sizeof(myData));
-   Serial.write(node);
-   Serial.println();
+  Serial.println("RF24-BLOB-BEGIN");
+  Serial.write((uint8_t *)&myData, sizeof(myData));
+  Serial.write(node);
+  Serial.println();
 }
 
