@@ -15,22 +15,31 @@
 #include <SPI.h>
 #include "printf.h"
 #include "RF24.h"
+//
+// Physical connections 
+//
+#define HW_CSN   10    // icsp
+#define HW_CE     9    // icsp
+// 
+// SW Logic and firmware definitions
+// 
+#define THIS_NODE_ID 2                  // master is 0, unoR3 debugger is 1, promicro_arrosoir is 2, etc
+#define DEFAULT_ACTIVATION 600          // 10h from now we activate (in case radio is down and can't program)
+#define DEFAULT_DURATION 10             // max 10s of activation time by default
 
-#define DEFAULT_ACTIVATION 600    // 10h from now we activate (in case radio is down and can't program)
-#define DEFAULT_DURATION   7200   // max 2h of activation time by default
-
-
-// Set up nRF24L01 radio on SPI bus plus pins 8 & 9
-RF24 radio(9,10);
+// Set up nRF24L01 radio on SPI bus plus pins HW_CE and HW_CSN
+RF24 radio(HW_CE, HW_CSN);
 
 // Radio pipe addresses for the 2 nodes to communicate.
 // WARNING!! 3Node and 4Node are used by my testing sketches ping/pong
-// all nodes read on pipe[0] ( which is address "0Node" )
-// promicro arrosoir writes on pipes[2] 
-// arduino uno r3 testing rig jig'a'ma'thing writes on pipe[1]
-// 5Node and 6Node are dedicated listening pipes for Unor3 and arrosoir, respectively
-// These last 2 are not sure to be implemented, and also 0Node should still work
-const uint8_t addresses[][6] = {"0Node","1Node","2Node","5Node","6Node"};
+const uint8_t addresses[][5] = {
+  "0Node", // master writes broadcasts here
+  "1Node", // unor3 writes here
+  "2Node", // unor3 reads here
+  "3Node", // arrosoir reads here
+  "4Node", // arrosoir writes here
+  "5Node"};// not yet used by anybody
+
 
 /**
  * exchange data via radio more efficiently with data structures.
@@ -51,7 +60,7 @@ struct relayctl {
   bool          state1 = false;                  // state of relay output 1                         1 byte
   bool          state2 = false;                  // "" 2                                            1 byte
   bool          waterlow = false;                // indicates whether water is low                  1 byte
-  byte          nodeid = 0;                      // nodeid is the identifier of the slave           1 byte
+  byte          nodeid = THIS_NODE_ID;           // nodeid is the identifier of the slave           1 byte
 } myData;
 
 void setup() 
@@ -117,7 +126,7 @@ void setup()
   // Open the 'other' pipe for reading, in position #1 (we can have up to 5 pipes open for reading)
   radio.openWritingPipe(addresses[0]);
   radio.openReadingPipe(1,addresses[1]);
-  radio.openReadingPipe(2,addresses[2]);
+  radio.openReadingPipe(4,addresses[4]);
 
   //
   // Dump the configuration of the rf unit for debugging
@@ -151,16 +160,17 @@ void loop(void)
     {
       String sched = s1.substring(s1.indexOf(" ")+1);
       myData.nodeid = sched.substring(0, sched.length()).toInt() ;
-      Serial.print("Selected pipe address for node ");
-      Serial.print(myData.nodeid);
-      if (myData.nodeid==1)
+      Serial.print("WARNING!!! Do you know what pipe address to target?!?\n\rSelected pipe address for node ");
+      Serial.println(myData.nodeid);
+      for(int i = 0; i < sizeof(addresses[myData.nodeid]); i++)
       {
-        radio.openWritingPipe(addresses[3]);
+        Serial.print(" ");
+        Serial.print(addresses[myData.nodeid][i]);
+        Serial.print(" ");
       }
-      if (myData.nodeid==2)
-      {
-        radio.openWritingPipe(addresses[4]);
-      }
+      radio.stopListening();
+      radio.openWritingPipe(addresses[myData.nodeid]);
+      radio.startListening();
       s1 = "";
     }
     else if (s1.indexOf("maxdur1 ")>=0)
@@ -187,16 +197,24 @@ void loop(void)
       myData.temp_thres = sched.substring(0, sched.length()).toInt() ;
       s1 = "";
     }
+    else if (s1.indexOf("debug")>=0)
+    {
+      Serial.println(F("Radio setup:"));  
+      radio.printDetails();
+      Serial.println(F("- - - - -"));  
+      Serial.println(F("Signal quality:"));  
+      bool goodSignal = radio.testRPD();
+      Serial.println(goodSignal ? "Strong signal > 64dBm" : "Weak signal < 64dBm" );
+      Serial.println(F("- - - - -"));  
+      s1 = "";
+    }
     else if ((s1.indexOf("upload")>=0))
     {
       Serial.println("Sending out new program...");
       s1 = "";
       printState(myData, 0);
-      // First, stop listening so we can talk.
       radio.stopListening();
-      // send data OTA
       radio.write(&myData, sizeof(myData), false);
-      // restart listening
       radio.startListening();
     }
     else if ((s1.indexOf("stop")!=0) && (s1.indexOf("status")!=0))
@@ -215,13 +233,14 @@ void loop(void)
     }
     
     if (s1 != "")
-    {
-      Serial.println("Sent command: " + s1);
+    {      
+      Serial.println("Sending command: " + s1);
       char qS[s1.length()+1] ;
       s1.toCharArray(qS, s1.length()+1);
       qS[s1.length()+1] = '\0';
 
-      
+      for (int retrysending=0; retrysending<10; retrysending++)
+      {
       // First, stop listening so we can talk.
       radio.stopListening();
       // send data OTA
@@ -240,7 +259,11 @@ void loop(void)
       if ( timeout )
       {
         Serial.println(F("Failed, response timed out."));
-        //return false;
+      }
+      else
+      {
+        break; // get out of looping for
+      }
       }
     }
   }
@@ -250,12 +273,13 @@ void loop(void)
     {
       while (radio.available(&pipeNumber))
       {
-        printf("#%x Node(#ID) wrote ", pipeNumber);
+        Serial.print("From Node(#ID) ");
+        Serial.print(pipeNumber);
+        Serial.print(", bytes received:");
         
         // Fetch the payload, and see if this was the last one.
         uint8_t len = radio.getDynamicPayloadSize();
-        Serial.print(len);
-        Serial.println(" bytes received:");
+        Serial.println(len);
       
         if ( len == sizeof(relayctl) )
         {
@@ -309,11 +333,12 @@ void printState(relayctl& myData, uint8_t node)
   Serial.print(myData.battery);
   Serial.print("V\nWaterLow:");
   Serial.print(myData.waterlow);
+  Serial.print("\nNodeID#:");
+  Serial.print(myData.nodeid);
   Serial.println();
   
   Serial.println("RF24-BLOB-BEGIN");
   Serial.write((uint8_t *)&myData, sizeof(myData));
-  Serial.write(node);
   Serial.println();
 }
 
