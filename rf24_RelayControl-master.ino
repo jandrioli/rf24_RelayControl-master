@@ -65,30 +65,20 @@ struct relayctl {
 
 void setup() 
 {
+#if defined(ARDUINO_AVR_LEONARDO) 
   /*a little something to tell we're alive*/
   for (int ii = 0; ii<= 5; ii++) 
   {  
     /*blinks the LEDS on the micro*/
-#if defined(ARDUINO_AVR_LEONARDO) 
     RXLED1;
     TXLED0; //TX LED is not tied to a normally controlled pin
-#else
-    digitalWrite(13, HIGH);
-#endif
     delay(500);              // wait for a second
-#if defined(ARDUINO_AVR_LEONARDO) 
     TXLED1;
     RXLED0;
-#else
-    digitalWrite(13, LOW);
-#endif
     delay(500);              // wait for a second
   }
-#if defined(ARDUINO_AVR_LEONARDO) 
   TXLED0; 
   RXLED0;
-#else
-  digitalWrite(13, LOW);
 #endif
   delay(500);
   
@@ -112,7 +102,7 @@ void setup()
   radio.setCRCLength( RF24_CRC_16 ) ;
   radio.setRetries( 15, 5 ) ;
   radio.setAutoAck( true ) ;
-  radio.setPALevel( RF24_PA_MAX ) ;
+  radio.setPALevel( RF24_PA_MIN ) ;
   radio.setChannel( 108 ) ;
   radio.setDataRate( RF24_250KBPS ) ;
   radio.enableDynamicPayloads(); //dont work with my modules :-/
@@ -148,7 +138,7 @@ void loop(void)
   if (Serial.available())
   {
     String s1 = Serial.readString();
-    Serial.print("You typed:");
+    Serial.print("You typed: ");
     Serial.println(s1);
     if (s1.indexOf("sched1 ")>=0)
     {
@@ -208,6 +198,14 @@ void loop(void)
       Serial.println(F("- - - - -"));  
       s1 = "";
     }
+    else if (s1.indexOf("scan")>=0)
+    {
+      Serial.println(F("Scanning Airwaves:"));  
+      doScan();
+      Serial.println(F("- - - - -"));  
+      Serial.println(F("REMEMBER YOU MUST RESTART THIS NODE NOW!!!"));
+      s1 = "";
+    }
     else if ((s1.indexOf("upload")>=0))
     {
       Serial.println("Sending out new program...");
@@ -243,9 +241,7 @@ void loop(void)
       {
       // First, stop listening so we can talk.
       radio.stopListening();
-      // send data OTA
       radio.write(qS, s1.length()+1, false);
-      // restart listening
       radio.startListening();
 
       // Wait here until we get a response, or timeout (arrosoir sleeps for 8s)
@@ -273,13 +269,13 @@ void loop(void)
     {
       while (radio.available(&pipeNumber))
       {
-        Serial.print("From Node(#ID) ");
-        Serial.print(pipeNumber);
-        Serial.print(", bytes received:");
         
         // Fetch the payload, and see if this was the last one.
         uint8_t len = radio.getDynamicPayloadSize();
-        Serial.println(len);
+        Serial.print("Recvd ");
+        Serial.print(len);
+        Serial.print(" bytes on pipe ");
+        Serial.println(pipeNumber);
       
         if ( len == sizeof(relayctl) )
         {
@@ -311,15 +307,15 @@ void loop(void)
 
 void printState(relayctl& myData, uint8_t node)
 {
-  Serial.print("Plug 1: ");
+  Serial.print("Plug 1 will be on after ");
   Serial.print(myData.sched1);
-  Serial.print("min, during ");
+  Serial.print("min of uptime, during ");
   Serial.print(myData.maxdur1);
   Serial.print("s(currently ");
   Serial.print(myData.state1);
-  Serial.print(")\nPlug 2: ");
+  Serial.print(")\nPlug 2 will be on after ");
   Serial.print(myData.sched2);
-  Serial.print("min, during ");
+  Serial.print("min of uptime, during ");
   Serial.print(myData.maxdur2);
   Serial.print("s(currently ");
   Serial.print(myData.state2);
@@ -327,9 +323,11 @@ void printState(relayctl& myData, uint8_t node)
   Serial.print(myData.temp_now);
   Serial.print("/");
   Serial.print(myData.temp_thres);
-  Serial.print("\nUptime: ");
+  Serial.print("\nCurrent uptime: ");
   Serial.print(myData.uptime);
-  Serial.print("min\nBattery:");
+  Serial.print("min (");
+  Serial.print(myData.uptime/60);
+  Serial.print("h)\nBattery:");
   Serial.print(myData.battery);
   Serial.print("V\nWaterLow:");
   Serial.print(myData.waterlow);
@@ -340,5 +338,77 @@ void printState(relayctl& myData, uint8_t node)
   Serial.println("RF24-BLOB-BEGIN");
   Serial.write((uint8_t *)&myData, sizeof(myData));
   Serial.println();
+}
+
+void doScan()
+{
+  
+  const uint8_t num_channels = 126;
+  uint8_t values[num_channels];
+  
+
+  radio.begin();
+  radio.setAutoAck(false);
+
+  // Get into standby mode
+  radio.startListening();
+  radio.stopListening();
+
+  radio.printDetails();
+
+  // Print out header, high then low digit
+  int i = 0;
+  while ( i < num_channels )
+  {
+    printf("%x",i>>4);
+    ++i;
+  }
+  Serial.println();
+  i = 0;
+  while ( i < num_channels )
+  {
+    printf("%x",i&0xf);
+    ++i;
+  }
+  Serial.println();
+  
+  const int num_reps = 100;
+
+  for (int loops=0; loops<10; loops++)
+  {
+    // Clear measurement values
+    memset(values,0,sizeof(values));
+  
+    // Scan all channels num_reps times
+    int rep_counter = num_reps;
+    while (rep_counter--)
+    {
+      int i = num_channels;
+      while (i--)
+      {
+        // Select this channel
+        radio.setChannel(i);
+  
+        // Listen for a little
+        radio.startListening();
+        delayMicroseconds(128);
+        radio.stopListening();
+  
+        // Did we get a carrier?
+        if ( radio.testCarrier() ){
+          ++values[i];
+        }
+      }
+    }
+  
+    // Print out channel measurements, clamped to a single hex digit
+    int i = 0;
+    while ( i < num_channels )
+    {
+      printf("%x",min(0xf,values[i]));
+      ++i;
+    }
+    Serial.println();
+  }
 }
 
