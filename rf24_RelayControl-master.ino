@@ -23,14 +23,13 @@
 // 
 // SW Logic and firmware definitions
 // 
-#define THIS_NODE_ID 2                  // master is 0, unoR3 debugger is 1, promicro_arrosoir is 2, etc
+#define THIS_NODE_ID 0                  // master is 0, unoR3 debugger is 1, promicro_arrosoir is 2, etc
 #define DEFAULT_ACTIVATION 600          // 10h from now we activate (in case radio is down and can't program)
 #define DEFAULT_DURATION 10             // max 10s of activation time by default
 
 // Set up nRF24L01 radio on SPI bus plus pins HW_CE and HW_CSN
 RF24 radio(HW_CE, HW_CSN);
 
-// Radio pipe addresses for the 2 nodes to communicate.
 // WARNING!! 3Node and 4Node are used by my testing sketches ping/pong
 const uint8_t addresses[][5] = {
   "0Node", // master writes broadcasts here
@@ -102,7 +101,7 @@ void setup()
   radio.setCRCLength( RF24_CRC_16 ) ;
   radio.setRetries( 15, 5 ) ;
   radio.setAutoAck( true ) ;
-  radio.setPALevel( RF24_PA_MIN ) ;
+  radio.setPALevel( RF24_PA_MAX ) ;
   radio.setChannel( 108 ) ;
   radio.setDataRate( RF24_250KBPS ) ;
   radio.enableDynamicPayloads(); //dont work with my modules :-/
@@ -116,7 +115,8 @@ void setup()
   // Open the 'other' pipe for reading, in position #1 (we can have up to 5 pipes open for reading)
   radio.openWritingPipe(addresses[0]);
   radio.openReadingPipe(1,addresses[1]);
-  radio.openReadingPipe(4,addresses[4]);
+  radio.openReadingPipe(2,addresses[4]);
+  radio.openReadingPipe(3,addresses[5]);
 
   //
   // Dump the configuration of the rf unit for debugging
